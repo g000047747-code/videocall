@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>通話</title>
+<style>
+:root{
+  --bg:#0d1b24; --panel:#14293a; --line:#26465d; --ink:#e8f1f6; --sub:#8aa6b8;
+  --on:#3ddc97; --off:#ff5d73; --accent:#f2b84b;
+}
+*{box-sizing:border-box;margin:0;-webkit-tap-highlight-color:transparent}
+html,body{height:100%}
+body{background:var(--bg);color:var(--ink);font-family:"Hiragino Sans","Noto Sans JP",system-ui,sans-serif;
+  padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  display:flex;flex-direction:column;overflow:hidden}
+button,input{font:inherit;color:inherit}
+.screen{flex:1;display:none;flex-direction:column;align-items:center;justify-content:center;gap:20px;padding:24px}
+.screen.show{display:flex}
+
+/* 入室 */
+#join h1{font-size:28px;letter-spacing:.08em;font-weight:700}
+.field{width:min(320px,100%);background:var(--panel);border:1.5px solid var(--line);border-radius:14px;
+  padding:14px 16px;font-size:18px;text-align:center;outline:none}
+.field:focus-visible{border-color:var(--accent)}
+.primary{width:min(320px,100%);background:var(--accent);color:#1b1405;border:0;border-radius:14px;
+  padding:14px;font-size:18px;font-weight:700;cursor:pointer}
+.primary:disabled{opacity:.5}
+#err{color:var(--off);font-size:14px;min-height:20px;text-align:center}
+
+/* 通話 */
+#call{justify-content:space-between;padding:0}
+#status{margin-top:28px;display:flex;align-items:center;gap:10px;font-size:15px;color:var(--sub)}
+#dot{width:10px;height:10px;border-radius:50%;background:var(--sub)}
+#dot.live{background:var(--on);box-shadow:0 0 0 0 rgba(61,220,151,.6);animation:pulse 1.8s infinite}
+@keyframes pulse{70%{box-shadow:0 0 0 12px rgba(61,220,151,0)}100%{box-shadow:0 0 0 0 rgba(61,220,151,0)}}
+#roomName{font-size:22px;font-weight:700;color:var(--ink);margin-top:4px}
+#center{flex:1;width:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;min-height:0;padding:0 16px}
+
+#videos{display:none;width:100%;max-width:760px;gap:12px;grid-template-columns:1fr 1fr}
+#videos.show{display:grid}
+.tile{position:relative;background:#000;border-radius:14px;overflow:hidden;aspect-ratio:3/4;cursor:pointer;border:1.5px solid var(--line)}
+.tile video{width:100%;height:100%;object-fit:cover;display:block}
+#localVideo{transform:scaleX(-1)}
+.tile span{position:absolute;left:8px;bottom:8px;background:rgba(0,0,0,.55);border-radius:8px;padding:3px 9px;font-size:12px}
+.tile.full{position:fixed;inset:0;z-index:50;border-radius:0;aspect-ratio:auto;border:0;background:#000}
+.tile.full video{object-fit:contain}
+@media (max-width:480px){#videos{grid-template-columns:1fr 1fr;gap:8px}}
+
+#bar{display:flex;gap:28px;padding:20px 0 32px}
+.round{width:72px;height:72px;border-radius:50%;border:0;display:grid;place-items:center;cursor:pointer;
+  background:var(--panel);outline:1.5px solid var(--line);transition:transform .12s, background .2s}
+.round:active{transform:scale(.92)}
+.round:focus-visible{outline:2.5px solid var(--accent)}
+.round svg{width:30px;height:30px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+#micBtn{background:var(--on);color:#06251a;outline:0}
+#micBtn.muted{background:var(--off);color:#2b0710}
+#keyBtn.open{background:var(--accent);color:#1b1405;outline:0}
+
+/* パスワード */
+#pw{position:fixed;inset:0;z-index:40;background:rgba(5,12,17,.78);display:none;align-items:center;justify-content:center;padding:24px}
+#pw.show{display:flex}
+#pwBox{background:var(--panel);border:1.5px solid var(--line);border-radius:20px;padding:24px;width:min(320px,100%);display:flex;flex-direction:column;gap:14px;align-items:center}
+#pwBox .field{background:var(--bg);letter-spacing:.5em;font-size:24px}
+#pwBox.bad{animation:shake .35s}
+@keyframes shake{25%{transform:translateX(-8px)}75%{transform:translateX(8px)}}
+#pwBox .ghost{background:none;border:0;color:var(--sub);padding:6px;cursor:pointer}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+
+<section class="screen show" id="join">
+  <h1>通話</h1>
+  <input class="field" id="roomInput" placeholder="ルーム名" maxlength="30" autocomplete="off" autocapitalize="off">
+  <button class="primary" id="joinBtn">入室</button>
+  <div id="err"></div>
+</section>
+
+<section class="screen" id="call">
+  <div style="text-align:center">
+    <div id="status"><span id="dot"></span><span id="statusText">接続中</span></div>
+    <div id="roomName"></div>
+  </div>
+
+  <div id="center">
+    <div id="videos">
+      <div class="tile" id="remoteTile"><video id="remoteVideo" autoplay playsinline muted></video><span>相手</span></div>
+      <div class="tile" id="localTile"><video id="localVideo" autoplay playsinline muted></video><span>自分</span></div>
+    </div>
+  </div>
+
+  <div id="bar">
+    <button class="round" id="micBtn" aria-label="マイク">
+      <svg viewBox="0 0 24 24" id="micOn"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+      <svg viewBox="0 0 24 24" id="micOff" style="display:none"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M3 3l18 18"/></svg>
+    </button>
+    <button class="round" id="keyBtn" aria-label="鍵">
+      <svg viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M16 7l3 3M14 9l2 2"/></svg>
+    </button>
+  </div>
+</section>
+
+<div id="pw">
+  <div id="pwBox">
+    <input class="field" id="pwInput" type="password" inputmode="numeric" maxlength="8" placeholder="••••" autocomplete="off">
+    <button class="primary" id="pwOk">決定</button>
+    <button class="ghost" id="pwCancel">閉じる</button>
+  </div>
+</div>
+
+<audio id="remoteAudio" autoplay playsinline></audio>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script>
+/* ▼ Firebaseコンソールの「プロジェクトの設定」にある値に置き換えてください */
+const firebaseConfig = {
+  apiKey: "AIzaSyAn7qiZyLMYUcakP4gtsSZ-Euj88a5d8J0",
+  authDomain: "videotool-5a4c1.firebaseapp.com",
+  projectId: "videotool-5a4c1",
+  storageBucket: "videotool-5a4c1.firebasestorage.app",
+  messagingSenderId: "301551052506",
+  appId: "1:301551052506:web:c54f87eca9b36e62d8e7e3"
+};
+/* ▲ */
+
+const PASSWORD = "1919";
+
+/* 無料のTURN（任意）。つながらない回線がある場合だけ設定してください。
+   metered.ca の無料プラン（Open Relay）に登録すると下の3つが発行されます。
+   空のままでもSTUNだけで動きます。 */
+const TURN_URLS = [];            // 例: ["turn:xxxx.metered.live:80", "turn:xxxx.metered.live:443?transport=tcp"]
+const TURN_USER = "";
+const TURN_PASS = "";
+
+const iceServers = [{ urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }];
+if(TURN_URLS.length) iceServers.push({ urls: TURN_URLS, username: TURN_USER, credential: TURN_PASS });
+const ICE = { iceServers };
+let isCaller = false;
+
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+
+const $ = id => document.getElementById(id);
+let pc, localStream, remoteStream, roomRef, unsubs = [];
+let unlocked = false;
+
+function setStatus(text, live){
+  $("statusText").textContent = text;
+  $("dot").classList.toggle("live", !!live);
+}
+
+/* ---------- 入室 ---------- */
+$("joinBtn").onclick = async () => {
+  const room = $("roomInput").value.trim();
+  if(!room){ $("err").textContent = "ルーム名を入力してください"; return; }
+  $("err").textContent = "";
+  $("joinBtn").disabled = true;
+
+  try{
+    // マイクとカメラの許可を求める
+    localStream = await navigator.mediaDevices.getUserMedia({
+      audio:{ echoCancellation:true, noiseSuppression:true, autoGainControl:true },
+      video:{ facingMode:"user" }
+    });
+  }catch(e){
+    $("err").textContent = "マイクとカメラの使用を許可してください";
+    $("joinBtn").disabled = false;
+    return;
+  }
+
+  $("localVideo").srcObject = localStream;
+  $("roomName").textContent = room;
+  $("join").classList.remove("show");
+  $("call").classList.add("show");
+  setStatus("接続中", false);
+
+  try{
+    await start(room);
+  }catch(e){
+    console.error(e);
+    setStatus("接続できませんでした", false);
+  }
+};
+$("roomInput").addEventListener("keydown", e => { if(e.key === "Enter") $("joinBtn").click(); });
+
+/* ---------- WebRTC + Firestore ---------- */
+async function start(room){
+  pc = new RTCPeerConnection(ICE);
+  remoteStream = new MediaStream();
+  $("remoteVideo").srcObject = remoteStream;
+  $("remoteAudio").srcObject = remoteStream;
+
+  localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
+  pc.ontrack = e => {
+    e.streams[0].getTracks().forEach(t => remoteStream.addTrack(t));
+    $("remoteAudio").play().catch(()=>{});
+  };
+  pc.onconnectionstatechange = () => {
+    const s = pc.connectionState;
+    if(s === "connected") setStatus("通話中", true);
+    else if(s === "connecting") setStatus("接続中", false);
+    else if(s === "disconnected" || s === "failed") setStatus("切断されました", false);
+  };
+
+  roomRef = db.collection("rooms").doc(room);
+  const snap = await roomRef.get();
+  const data = snap.exists ? snap.data() : null;
+
+  if(data && data.offer && !data.answer){
+    await joinAsCallee();
+  }else{
+    await createAsCaller();
+  }
+}
+
+async function clearCandidates(){
+  for(const name of ["callerCandidates","calleeCandidates"]){
+    const qs = await roomRef.collection(name).get();
+    const batch = db.batch();
+    qs.forEach(d => batch.delete(d.ref));
+    await batch.commit();
+  }
+}
+
+async function createAsCaller(){
+  isCaller = true;
+  await clearCandidates();
+  const callerCol = roomRef.collection("callerCandidates");
+  const calleeCol = roomRef.collection("calleeCandidates");
+
+  pc.onicecandidate = e => { if(e.candidate) callerCol.add(e.candidate.toJSON()); };
+
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  await roomRef.set({ offer:{ type:offer.type, sdp:offer.sdp }, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
+  setStatus("相手を待っています", false);
+
+  unsubs.push(roomRef.onSnapshot(async s => {
+    const d = s.data();
+    if(d && d.answer && !pc.currentRemoteDescription){
+      await pc.setRemoteDescription(new RTCSessionDescription(d.answer));
+    }
+  }));
+  unsubs.push(calleeCol.onSnapshot(s => {
+    s.docChanges().forEach(c => { if(c.type === "added") pc.addIceCandidate(new RTCIceCandidate(c.doc.data())).catch(()=>{}); });
+  }));
+}
+
+async function joinAsCallee(){
+  const callerCol = roomRef.collection("callerCandidates");
+  const calleeCol = roomRef.collection("calleeCandidates");
+
+  pc.onicecandidate = e => { if(e.candidate) calleeCol.add(e.candidate.toJSON()); };
+
+  const offer = (await roomRef.get()).data().offer;
+  await pc.setRemoteDescription(new RTCSessionDescription(offer));
+  const answer = await pc.createAnswer();
+  await pc.setLocalDescription(answer);
+  await roomRef.update({ answer:{ type:answer.type, sdp:answer.sdp } });
+
+  unsubs.push(callerCol.onSnapshot(s => {
+    s.docChanges().forEach(c => { if(c.type === "added") pc.addIceCandidate(new RTCIceCandidate(c.doc.data())).catch(()=>{}); });
+  }));
+}
+
+/* ---------- マイク ---------- */
+$("micBtn").onclick = () => {
+  const track = localStream && localStream.getAudioTracks()[0];
+  if(!track) return;
+  track.enabled = !track.enabled;
+  const muted = !track.enabled;
+  $("micBtn").classList.toggle("muted", muted);
+  $("micOn").style.display = muted ? "none" : "";
+  $("micOff").style.display = muted ? "" : "none";
+};
+
+/* ---------- 鍵 / パスワード ---------- */
+$("keyBtn").onclick = () => {
+  if(unlocked){ setVideos(false); return; }
+  $("pwInput").value = "";
+  $("pw").classList.add("show");
+  setTimeout(() => $("pwInput").focus(), 50);
+};
+$("pwCancel").onclick = () => $("pw").classList.remove("show");
+$("pwOk").onclick = checkPw;
+$("pwInput").addEventListener("keydown", e => { if(e.key === "Enter") checkPw(); });
+
+function checkPw(){
+  if($("pwInput").value === PASSWORD){
+    $("pw").classList.remove("show");
+    setVideos(true);
+  }else{
+    const box = $("pwBox");
+    box.classList.remove("bad"); void box.offsetWidth; box.classList.add("bad");
+    $("pwInput").value = "";
+  }
+}
+
+function setVideos(on){
+  unlocked = on;
+  $("videos").classList.toggle("show", on);
+  $("keyBtn").classList.toggle("open", on);
+  if(on){
+    $("remoteVideo").play().catch(()=>{});
+    $("localVideo").play().catch(()=>{});
+  }else{
+    document.querySelectorAll(".tile.full").forEach(t => t.classList.remove("full"));
+    if(document.fullscreenElement) document.exitFullscreen().catch(()=>{});
+  }
+}
+
+/* ---------- タップで全画面 ---------- */
+document.querySelectorAll(".tile").forEach(tile => {
+  tile.addEventListener("click", () => {
+    const isFull = tile.classList.contains("full");
+    document.querySelectorAll(".tile.full").forEach(t => t.classList.remove("full"));
+    if(isFull){
+      if(document.fullscreenElement) document.exitFullscreen().catch(()=>{});
+      return;
+    }
+    tile.classList.add("full");
+    if(tile.requestFullscreen) tile.requestFullscreen().catch(()=>{});
+    else if(tile.webkitRequestFullscreen) tile.webkitRequestFullscreen();
+  });
+});
+document.addEventListener("fullscreenchange", () => {
+  if(!document.fullscreenElement) document.querySelectorAll(".tile.full").forEach(t => t.classList.remove("full"));
+});
+
+/* ---------- 退出時の後片付け ---------- */
+window.addEventListener("pagehide", () => {
+  unsubs.forEach(u => u());
+  if(isCaller && roomRef) roomRef.delete().catch(()=>{});
+  if(pc) pc.close();
+  if(localStream) localStream.getTracks().forEach(t => t.stop());
+});
+</script>
+</body>
+</html>
